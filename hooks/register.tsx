@@ -32,6 +32,8 @@ import {
 const PLUGIN = 'night-violet'
 const PANE = { id: 'night-violet', title: '造型設定' } as const
 const STORE_KEY = 'settings'
+/** The colour field's key: what its `ui.message` posts carry as `e.element`. */
+const FIELD = 'color-field'
 
 // Bump the tag when LookSettings changes shape: it declines what an earlier
 // version kept in the session, which outlives a reload. The plugin and key
@@ -202,6 +204,22 @@ export const register: Register = on => {
     }
   })
 
+  // A colour picked on the field, posted when the pointer is let go. It came
+  // from code, so it is read as any typed colour is.
+  on('ui.message', async ($, e, next) => {
+    if (e.element !== FIELD) {
+      return next(e)
+    }
+    const posted = typeof e.data === 'object' && e.data !== null ? (e.data as { hex?: unknown }).hex : undefined
+    const hex = typeof posted === 'string' ? parseHex(posted) : undefined
+
+    if (hex !== undefined) {
+      await setColor($, hex)
+    }
+
+    return next(e)
+  })
+
   // The lights. Every plugin's hook hears every backdrop, so leave another's alone.
   on('ui.render', { component: 'Backdrop' }, async ($, e, next) => {
     if (e.props.plugin !== PLUGIN) {
@@ -246,6 +264,31 @@ export const register: Register = on => {
     if (isLights && (e.surface === 'desktop' || e.surface === 'mobile')) {
       const { Svg } = $.ui.resolve(e)
       preview = <Svg source={scene(s)} alt={`預覽：${describe(s)}`} width={320} height={120} isInteractive />
+    }
+
+    // The colour field: cells the surface paints, picked by pointing (press or
+    // drag, applied on letting go). Only the terminal and the desktop draw a
+    // Client; elsewhere the swatch list and the hex field below stay.
+    let field: RenderElement | null = null
+
+    if (e.surface === 'desktop' || e.surface === 'terminal') {
+      const { Client } = $.ui.resolve(e)
+      field = (
+        <Box flexDirection="column">
+          <Text dimColor>在色譜或色票上點一下，或按住拖曳，放開就套用到「{slotName(slot)}」。</Text>
+          <Client
+            key={FIELD}
+            module="./color-field.tsx"
+            width="100%"
+            props={{
+              rows: SPECTRUM.map(row => [...row]),
+              swatches: SWATCHES.map(swatch => ({ ...swatch })),
+              current,
+              slotName: slotName(slot),
+            }}
+          />
+        </Box>
+      )
     }
 
     const stepper = (key: 'brightness' | 'menu' | 'glass', title: string, max: number, shown: string) => (
@@ -344,42 +387,21 @@ export const register: Register = on => {
         {isLights ? lights : picture}
 
         <Text bold>顏色</Text>
-        <Box flexDirection="row" flexWrap="wrap" gap={1}>
-          {slots.map(one => (
-            <Button
-              key={`slot-${one}`}
-              variant={one === slot ? 'primary' : 'secondary'}
-              onPress={() => void update($, editing, was => ({ ...was, slot: one }))}
-            >
-              <Text color={colorOf(one)}>●</Text> {slotName(one)}
-            </Button>
-          ))}
-        </Box>
-        <Text dimColor>
-          點色譜或色票，改的是上面選中的「{slotName(slot)}」（現在 {current}）。
-        </Text>
-        <Box flexDirection="column">
-          {SPECTRUM.map(row => (
-            <Box flexDirection="row">
-              {row.map(hex => (
-                <Button key={`pick-${hex}`} plain onPress={() => void setColor($, hex)}>
-                  <Text color={hex}>{hex === current ? '◆' : '■'}</Text>
-                </Button>
-              ))}
-            </Box>
-          ))}
-        </Box>
-        <Box flexDirection="row" flexWrap="wrap" gap={1}>
-          {SWATCHES.map(swatch => (
-            <Button
-              key={`swatch-${swatch.hex}`}
-              variant={swatch.hex === current ? 'primary' : 'secondary'}
-              onPress={() => void setColor($, swatch.hex)}
-            >
-              <Text color={swatch.hex}>●</Text> {swatch.name}
-            </Button>
-          ))}
-        </Box>
+        <Select
+          key="slot"
+          label="要改的顏色"
+          options={slots.map(one => ({ value: one, label: `${slotName(one)}（${colorOf(one)}）` }))}
+          value={slot}
+          onSelect={value => void update($, editing, was => ({ ...was, slot: value as ColorSlot }))}
+        />
+        {field ?? <Text dimColor>從色票選，或打色碼，改的是「{slotName(slot)}」（現在 {current}）。</Text>}
+        <Select
+          key="swatch"
+          label="色票"
+          options={SWATCHES.map(swatch => ({ value: swatch.hex, label: `${swatch.name}（${swatch.hex}）` }))}
+          {...(SWATCHES.some(swatch => swatch.hex === current) ? { value: current } : {})}
+          onSelect={hex => void setColor($, hex)}
+        />
         <Input
           key="hex"
           label="色碼"

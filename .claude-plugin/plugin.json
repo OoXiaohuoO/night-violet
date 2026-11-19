@@ -1,6 +1,6 @@
 {
   "name": "night-violet",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "造型「夜紫」：可換色調的深色面板配可換的重點色，背景有可疊加的燈效（九種）或自己的圖片，輸入 /look 開設定面板（只有桌面版、手機版會畫）",
   "types": "./types/index.d.ts"
 }

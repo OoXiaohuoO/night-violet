@@ -1,11 +1,11 @@
 import type { FsEntry, On, ThemeSetArgs, UiOpenResult } from 'claude-code'
 import { expect, test } from 'claude-code/testing'
-import type { Engine } from 'claude-code/testing'
+import type { Engine, Mounted } from 'claude-code/testing'
 
 import { EFFECTS, scene } from '../hooks/effects'
 import { buildLook } from '../hooks/look'
 import { checkColors } from '../hooks/make-colors.js'
-import { DEFAULTS, MENU_LIFTS, SWATCHES, TONES } from '../hooks/settings'
+import { DEFAULTS, MENU_LIFTS, SPECTRUM, SWATCHES, TONES } from '../hooks/settings'
 import type { EffectId, Layer, LookSettings, ToneId } from '../types'
 
 const PLUGIN = 'night-violet'
@@ -34,6 +34,33 @@ const BACKDROP = {
 
 /** A cell of the spectrum chart: the vivid green of its third row. */
 const GREEN = '#1aff1a'
+
+/** The colour field's key in the pane. */
+const FIELD = 'color-field'
+
+/**
+ * Where a colour sits on the field laid out 24 cells across: the strip on
+ * row 0, then the spectrum two cells a hue, then the swatches six cells each,
+ * four to a row.
+ */
+function cellOf(hex: string) {
+  const row = SPECTRUM.findIndex(colors => colors.includes(hex))
+
+  if (row >= 0) {
+    return { x: SPECTRUM[row]!.indexOf(hex) * 2, y: 1 + row }
+  }
+  const index = SWATCHES.findIndex(swatch => swatch.hex === hex)
+
+  return { x: (index % 4) * 6 + 1, y: 1 + SPECTRUM.length + Math.floor(index / 4) }
+}
+
+/** Presses on a colour of the pane's field and lets go there, as a click does. */
+async function pickOnField(pane: Pick<Mounted<'desktop'>, 'resize' | 'pointer'>, hex: string) {
+  const at = cellOf(hex)
+  await pane.resize({ columns: 24, rows: 12, in: FIELD })
+  await pane.pointer({ type: 'down', ...at, button: 'left', in: FIELD })
+  await pane.pointer({ type: 'up', ...at, button: 'left', in: FIELD })
+}
 
 const picture = (name: string, size: number): FsEntry => ({ name, kind: 'file', size, mtimeMs: 0, isLink: false })
 
@@ -119,7 +146,7 @@ test('an effect picked in the pane and a colour picked on the spectrum change th
 
   const pane = await $.ui.mount(PANE)
   await pane.select({ key: 'effect', value: 'breathing' })
-  await pane.press({ key: `pick-${GREEN}` })
+  await pickOnField(pane, GREEN)
   await pane.unmount()
 
   const picked = withLayer(0, { effect: 'breathing', color1: GREEN })
@@ -150,13 +177,82 @@ test('the accent picked on the spectrum repaints the interface in it', async ($,
   await $.session.start(START)
 
   const pane = await $.ui.mount(PANE)
-  await pane.press({ key: 'slot-accent' })
-  await pane.press({ key: `pick-${GREEN}` })
+  await pane.select({ key: 'slot', value: 'accent' })
+  await pickOnField(pane, GREEN)
   await pane.unmount()
 
   expect(themes).toHaveLength(2)
   expect(themes[1]).toEqual(buildLook({ ...DEFAULTS, accent: GREEN }).look)
   expect(themes[1]).not.toEqual(themes[0])
+})
+
+test('a drag over the colour field changes nothing until the pointer is let go, then sets the colour under it', async ($, on) => {
+  const { store } = engine(on, DEFAULTS)
+  await $.session.start(START)
+
+  const pane = await $.ui.mount(PANE)
+  await pane.resize({ columns: 24, rows: 12, in: FIELD })
+  await pane.pointer({ type: 'down', ...cellOf(SPECTRUM[0]![0]!), button: 'left', in: FIELD })
+  await pane.pointer({ type: 'move', ...cellOf(SPECTRUM[3]![8]!), button: 'left', in: FIELD })
+
+  expect(store.get('settings')).toEqual(DEFAULTS)
+
+  await pane.pointer({ type: 'up', ...cellOf(SPECTRUM[3]![8]!), button: 'left', in: FIELD })
+  await pane.unmount()
+
+  expect(store.get('settings')).toEqual(withLayer(0, { color1: SPECTRUM[3]![8]! }))
+})
+
+test('a named swatch on the colour field sets that colour', async ($, on) => {
+  const { store } = engine(on, DEFAULTS)
+  await $.session.start(START)
+
+  const orange = SWATCHES.find(swatch => swatch.name === '橘')!.hex
+  const pane = await $.ui.mount(PANE)
+  await pickOnField(pane, orange)
+  await pane.unmount()
+
+  expect(store.get('settings')).toEqual(withLayer(0, { color1: orange }))
+})
+
+test('the strip and a press off the colours change nothing', async ($, on) => {
+  const { store } = engine(on, DEFAULTS)
+  await $.session.start(START)
+
+  const pane = await $.ui.mount(PANE)
+  await pane.resize({ columns: 24, rows: 12, in: FIELD })
+  await pane.pointer({ type: 'down', x: 3, y: 0, button: 'left', in: FIELD })
+  await pane.pointer({ type: 'up', x: 3, y: 0, button: 'left', in: FIELD })
+  await pane.pointer({ type: 'down', x: 23, y: 1 + SPECTRUM.length + 2, button: 'left', in: FIELD })
+  await pane.pointer({ type: 'up', x: 23, y: 1 + SPECTRUM.length + 2, button: 'left', in: FIELD })
+  await pane.unmount()
+
+  expect(store.get('settings')).toEqual(DEFAULTS)
+})
+
+test('a post from the field that is not a colour changes nothing', async ($, on) => {
+  const { store } = engine(on, DEFAULTS)
+  await $.session.start(START)
+
+  const pane = await $.ui.mount(PANE)
+  await pane.post({ hex: 'purple' }, { in: FIELD })
+  await pane.post({ nothing: true }, { in: FIELD })
+  await pane.unmount()
+
+  expect(store.get('settings')).toEqual(DEFAULTS)
+})
+
+test('the swatch list sets a colour, on the phone too, where no colour field is drawn', async ($, on) => {
+  const { store } = engine(on, DEFAULTS)
+  await $.session.start(START)
+
+  const pink = SWATCHES.find(swatch => swatch.name === '粉')!.hex
+  const pane = await $.ui.mount({ ...PANE, surface: 'mobile' })
+  expect(await pane.find({ type: 'Client' })).toBeUndefined()
+  await pane.select({ key: 'swatch', value: pink })
+  await pane.unmount()
+
+  expect(store.get('settings')).toEqual(withLayer(0, { color1: pink }))
 })
 
 test('a panel tone, stronger borders and a code theme set in the pane repaint the interface with them', async ($, on) => {
