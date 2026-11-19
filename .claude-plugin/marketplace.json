@@ -1,0 +1,6 @@
+{
+  "name": "night-violet",
+  "description": "夜紫：Claude 桌面版的造型 mod，深色面板配可調的燈效背景",
+  "owner": { "name": "OoXiaohuoO" },
+  "plugins": [{ "name": "night-violet", "source": "./" }]
+}
